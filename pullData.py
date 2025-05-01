@@ -74,7 +74,11 @@ def load_data_from_api(table_name, conn):
                                             partner2Code=None,
                                             customsCode=None, motCode=None, maxRecords=500, format_output='JSON',
                                             aggregateBy=None, breakdownMode='classic', countOnly=None, includeDesc=True)
-            if not mydf.empty:
+            
+            if mydf is None:
+                print("No data for this period.")
+                continue
+            elif not mydf.empty:
                 # Add a new column 'pk' to the DataFrame, this column will serve as our primary key so that we can properly insert/replace data.
                 # The format is period_reporterCode_flowCode_partnerCode_cmdCode which creates a unique key for each row.
                 # This is important because we are using the INSERT OR REPLACE statement in SQLite.  
