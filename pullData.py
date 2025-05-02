@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 import time
 import comtradeapicall
 import sqlite3
-
+import os
 # CREATE A NEW FUNCTION THAT WILL BE CREATE DB, THEN WE JUST CHECK IF THE DB EXISTS OR NOT SO WE CAN SKIP THE CREATE TABLE QUERY EVERYTIME
 # THEN WE CAN JUST DO THE INSERT OR REPLACE INTO TABLE QUERY
 
@@ -26,6 +26,9 @@ def load_data_from_api(table_name, conn):
     Params: None
     Purpose: Pull Canada's export data from https://comtradeplus.un.org/ api and load it into db, also loading into a csv. 
     '''
+    apikey = os.getenv('primaryKey')
+    if apikey:
+        print("WE HAVE A KEY")
     start = datetime(2022, 1, 1)
     end = datetime(2024, 12, 1)
     periods = []
@@ -40,10 +43,10 @@ def load_data_from_api(table_name, conn):
     cmdCodes = ['27','26','25']
     # we do the below so we can extract column names in order to do insert/replace in the table
     # this will allow multiple runs of the notebook that does not mess up the DB
-    mydf = comtradeapicall.previewFinalData(typeCode='C', freqCode='M', clCode='HS', period='202201',
+    mydf = comtradeapicall.getFinalData(subscription_key = apikey, typeCode='C', freqCode='M', clCode='HS', period='202201',
                                             reporterCode='124', cmdCode='27', flowCode='X', partnerCode=None,
                                             partner2Code=None,
-                                            customsCode=None, motCode=None, maxRecords=500, format_output='JSON',
+                                            customsCode=None, motCode=None, maxRecords=100000, format_output='JSON',
                                             aggregateBy=None, breakdownMode='classic', countOnly=None, includeDesc=True)
     # for each period we call the api and pull all export data, load it into a df which then appends the data to the sqlite database.
     columns = mydf.columns.tolist()
@@ -69,10 +72,10 @@ def load_data_from_api(table_name, conn):
     # now we will populate the DB with the data we pulled from the API
     for period in periods:
         for cmdCode in cmdCodes:
-            mydf = comtradeapicall.previewFinalData(typeCode='C', freqCode='M', clCode='HS', period=period,
+            mydf = comtradeapicall.getFinalData(subscription_key = apikey,typeCode='C', freqCode='M', clCode='HS', period=period,
                                             reporterCode='124', cmdCode=cmdCode, flowCode='X', partnerCode=None,
                                             partner2Code=None,
-                                            customsCode=None, motCode=None, maxRecords=500, format_output='JSON',
+                                            customsCode=None, motCode=None, maxRecords=100000, format_output='JSON',
                                             aggregateBy=None, breakdownMode='classic', countOnly=None, includeDesc=True)
             
             if mydf is None:
