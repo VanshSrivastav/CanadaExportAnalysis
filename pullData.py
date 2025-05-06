@@ -4,6 +4,7 @@ import time
 import comtradeapicall
 import sqlite3
 import os
+import numpy as np
 # CREATE A NEW FUNCTION THAT WILL BE CREATE DB, THEN WE JUST CHECK IF THE DB EXISTS OR NOT SO WE CAN SKIP THE CREATE TABLE QUERY EVERYTIME
 # THEN WE CAN JUST DO THE INSERT OR REPLACE INTO TABLE QUERY
 
@@ -11,15 +12,21 @@ import os
 
 # code below is used to query the data from the API and load it into a CSV. Since I am using free data the max I can query is 500 rows per thing. Otherwise gotta pay $$$$$
 
-def infer_sqlite_type(dtype):
+def infer_azure_sqlserver_type(dtype):
+    """Map pandas data types to Azure SQL Server data types."""
     if pd.api.types.is_integer_dtype(dtype):
-        return "INTEGER"
+        return "INT"  # Standard integer type in SQL Server
     elif pd.api.types.is_float_dtype(dtype):
-        return "REAL"
+        return "FLOAT"  # Double precision floating point
     elif pd.api.types.is_bool_dtype(dtype):
-        return "INTEGER"  # SQLite uses 0/1 for booleans
+        return "BIT"  # SQL Server's boolean type
+    elif pd.api.types.is_datetime64_any_dtype(dtype):
+        return "DATETIME2"  # Modern datetime type in SQL Server
+    elif pd.api.types.is_string_dtype(dtype):
+        return "NVARCHAR(MAX)"  # Unicode variable-length string with large capacity
     else:
-        return "TEXT"
+        return "NVARCHAR(MAX)"  # Default to Unicode text for unrecognized types
+
 
 def load_data_from_api(table_name, conn):
     '''
@@ -46,7 +53,7 @@ def load_data_from_api(table_name, conn):
     mydf = comtradeapicall.getFinalData(subscription_key = apikey, typeCode='C', freqCode='M', clCode='HS', period='202201',
                                             reporterCode='124', cmdCode='27', flowCode='X', partnerCode=None,
                                             partner2Code=None,
-                                            customsCode=None, motCode=None, maxRecords=100000, format_output='JSON',
+                                            customsCode=None, motCode=None, maxRecords=1, format_output='JSON',
                                             aggregateBy=None, breakdownMode='classic', countOnly=None, includeDesc=True)
     # for each period we call the api and pull all export data, load it into a df which then appends the data to the sqlite database.
     columns = mydf.columns.tolist()
@@ -56,20 +63,35 @@ def load_data_from_api(table_name, conn):
     column_names = ', '.join(columns)  # Column names in the query
     column_type_map = {}
     for col in mydf.columns:
-        column_type_map[col] = infer_sqlite_type(mydf[col].dtype)
+        column_type_map[col] = infer_azure_sqlserver_type(mydf[col].dtype)
 
     # Manually add 'pk' type so we can use it as a primary key
-    column_type_map['pk'] = "TEXT"
+    column_type_map['pk'] = "VARCHAR(255)"
 
-    table_create = f"CREATE TABLE IF NOT EXISTS {table_name} ("
+    columns_def = ""
     for col in columns:
         coltype = column_type_map[col]
-        table_create += f"{col} {coltype}, "
+        columns_def += f"{col} {coltype}, "
+    columns_def += "PRIMARY KEY (pk)"
 
-    table_create += "PRIMARY KEY (pk));"    
-    conn.execute(table_create)  # Create the table if it doesn't exist
+    escaped_columns_def = columns_def.replace("'", "''")
+
+    table_create = f"""
+    IF NOT EXISTS (
+        SELECT * FROM INFORMATION_SCHEMA.TABLES 
+        WHERE TABLE_NAME = '{table_name}'
+    )
+    BEGIN
+        EXEC('CREATE TABLE {table_name} ({escaped_columns_def})')
+    END
+    """
+    cursor = conn.cursor()  
+    cursor.execute(table_create)  # Create the table if it doesn't exist
     conn.commit()
     # now we will populate the DB with the data we pulled from the API
+
+
+
     for period in periods:
         for cmdCode in cmdCodes:
             mydf = comtradeapicall.getFinalData(subscription_key = apikey,typeCode='C', freqCode='M', clCode='HS', period=period,
@@ -94,12 +116,38 @@ def load_data_from_api(table_name, conn):
                 )
                 # we run this query to insert the pulled batch data from mydf into the sqlite db which we defined above
                 print('Fetched: ', len(mydf), ' records for period: ', period, ' cmdCode: ', cmdCode)
-                query = f"INSERT OR REPLACE INTO {table_name} ({column_names}) VALUES ({placeholders})"
-                data = [tuple(row) for row in mydf.values]
-                conn.executemany(query, data)
+
+                update_query = f"""
+                UPDATE {table_name}
+                SET {', '.join([f"{col} = ?" for col in columns[1:]])}  -- skip pk in update
+                WHERE pk = ?
+                """
+
+                insert_query = f"""
+                INSERT INTO {table_name} ({', '.join(columns)})
+                VALUES ({', '.join(['?' for _ in range(len(columns))])})
+                """
+                for row in mydf.itertuples(index=False):
+                    # Convert row values to the correct types (you can adjust the casting as needed)
+                    row_values = tuple(
+                        None if value == '' or (isinstance(value, float) and np.isnan(value)) else value
+                        for value in row
+                    )  # Replace empty string with None for SQL NULL handling
+                    
+                    try:
+                        # Attempt to update the row
+                        cursor.execute(update_query, (*row_values[1:], row_values[0]))  # Skip pk in update
+                        if cursor.rowcount == 0:  # If no rows were updated (i.e., row didn't exist), insert a new record
+                            cursor.execute(insert_query, row_values)
+                    except Exception as e:
+                        # Log the error and the problematic row
+                        print(f"Error occurred while processing row: {row_values}")
+                        print(f"Error: {e}")
+                # Commit the changes
                 conn.commit()
                 # Append the DataFrame to the database file and append to list to add to csv, warning, reruning this code will duplicate the data                print(f"Retrieved {len(mydf)} records.")
             else:
                 print("No data for this commodity.")
             
             time.sleep(1) # do not want to get blocked by API on accident
+            
