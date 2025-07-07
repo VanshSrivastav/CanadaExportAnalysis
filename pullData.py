@@ -2,11 +2,8 @@ import pandas as pd
 from datetime import datetime, timedelta
 import time
 import comtradeapicall
-import sqlite3
 import os
 import numpy as np
-import sys
-import pypyodbc as odbc
 from dateutil.relativedelta import relativedelta
 # CREATE A NEW FUNCTION THAT WILL BE CREATE DB, THEN WE JUST CHECK IF THE DB EXISTS OR NOT SO WE CAN SKIP THE CREATE TABLE QUERY EVERYTIME
 # THEN WE CAN JUST DO THE INSERT OR REPLACE INTO TABLE QUERY
@@ -39,7 +36,7 @@ def load_data_from_api(table_name, conn):
     apikey = os.getenv('primaryKey')
     if apikey:
         print("WE HAVE A KEY")
-    start = datetime(2020, 1, 1)
+    start = datetime(2024, 2, 2)
     end = datetime(2024, 12, 1)
     periods = []
     current = start
@@ -61,6 +58,8 @@ def load_data_from_api(table_name, conn):
     if joined_period:
         joined_period = joined_period.rstrip(',')
         periods.append(joined_period)
+
+    # missing periods for 33, 66, 99 = 201601, 201702, 201703, 201704, 201705, 201706, 201707, 201708, 201709, 201710, 201711, 201712, 202101, 202202, 202401, 202412 
 
     cmdCodes = [
     "01",  # Live animals
@@ -213,6 +212,7 @@ def load_data_from_api(table_name, conn):
 
     for period in periods:
         for cmdCodeStrings in concatenatedCodes:
+            cursor = conn.cursor()  # apparently re iniiting it makes the connection not expire 
             mydf = comtradeapicall.getFinalData(subscription_key = apikey,typeCode='C', freqCode='M', clCode='HS', period=period,
                                                 reporterCode='124', cmdCode=cmdCodeStrings, flowCode='X', partnerCode=None, partner2Code=None, 
                                                 customsCode=None, motCode=None, maxRecords=100000, format_output='JSON',
@@ -232,6 +232,8 @@ def load_data_from_api(table_name, conn):
                     mydf['partnerCode'].astype(str) + "_" +
                     mydf['cmdCode'].astype(str)
                 )
+                mydf = mydf.replace({np.nan: None})     
+
                 # we run this query to insert the pulled batch data from mydf into the sqlite db which we defined above
                 print('Fetched: ', len(mydf), ' records for period: ', period, ' cmdCode: ', cmdCodeStrings)
 
@@ -283,39 +285,13 @@ def load_data_from_api(table_name, conn):
                             
                         except Exception as batch_error:
                             print(f"Batch {batch_num} merge failed: {batch_error}")
-                            print(f"Falling back to individual row processing for batch {batch_num}...")
-                            
-                            # Fallback to row-by-row for this batch only
-                            for row in batch:
-                                try:
-                                    cursor.execute(update_query, (*row[1:], row[0]))
-                                    if cursor.rowcount == 0:
-                                        cursor.execute(insert_query, row)
-                                except Exception as row_error:
-                                    print(f"Error with row {row}: {row_error}")
-                            
-                            conn.commit()  # Commit after processing the failed batch
-                    
-                    print(f"Total processed: {total_records} records in {(total_records + batch_size - 1) // batch_size} batches")
-                    
+                            cursor.close()
                 except Exception as e:
-                    print(f"Overall processing failed: {e}")
-                    print(f"Falling back to complete individual row processing...")
-                    
-                    # Complete fallback to row-by-row if everything fails (your original logic)
-                    for row in mydf.itertuples(index=False):
-                        row_values = tuple(
-                            None if value == '' or (isinstance(value, float) and np.isnan(value)) else value
-                            for value in row
-                        )
-                        try:
-                            cursor.execute(update_query, (*row_values[1:], row_values[0]))
-                            if cursor.rowcount == 0:
-                                cursor.execute(insert_query, row_values)
-                        except Exception as row_error:
-                            print(f"Error with row {row_values}: {row_error}")
-                    
-                    conn.commit()  # Only commit here if using complete fallback
+                    print(f"Error processing data for period {period} and cmdCode {cmdCodeStrings}: {e}")
+                finally:
+                    cursor.close()
+
+                    print(f"Total processed: {total_records} records in {(total_records + batch_size - 1) // batch_size} batches")
             else:
                 print("No data for this commodity.")
             
