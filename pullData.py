@@ -12,6 +12,9 @@ from dateutil.relativedelta import relativedelta
 
 # code below is used to query the data from the API and load it into a CSV. Since I am using free data the max I can query is 500 rows per thing. Otherwise gotta pay $$$$$
 
+# chatGPT gernerated, this makes the data insertion much easier and more efficient. Since we don't have to manually specify the data types for each column, it will automatically infer the types based on the pandas DataFrame's dtypes.
+# This is useful for Azure SQL Server, as it allows us to create a table with the
+# appropriate data types based on the data we are inserting. This way, we can avoid issues with data type mismatches and ensure that the data is stored correctly in the database.
 def infer_azure_sqlserver_type(dtype):
     """Map pandas data types to Azure SQL Server data types."""
     if pd.api.types.is_integer_dtype(dtype):
@@ -31,7 +34,7 @@ def infer_azure_sqlserver_type(dtype):
 def load_data_from_api(table_name, conn):
     '''
     Params: None
-    Purpose: Pull Canada's export data from https://comtradeplus.un.org/ api and load it into db, also loading into a csv. 
+    Purpose: Pull Canada's export data from https://comtradeplus.un.org/ api and load it into db
     '''
     apikey = os.getenv('primaryKey')
     if apikey:
@@ -59,8 +62,8 @@ def load_data_from_api(table_name, conn):
         joined_period = joined_period.rstrip(',')
         periods.append(joined_period)
 
-    # missing periods for 33, 66, 99 = 201601, 201702, 201703, 201704, 201705, 201706, 201707, 201708, 201709, 201710, 201711, 201712, 202101, 202202, 202401, 202412 
-
+    # AI generated list of cmdCodes, these are the commodity codes we will use to pull data from the API, theres 100 so I got 
+    # missing codes: 77, 77 is reserved for future use, so we will not use it as there isnt anything for it.
     cmdCodes = [
     "01",  # Live animals
     "02",  # Meat and edible meat offal
@@ -212,7 +215,7 @@ def load_data_from_api(table_name, conn):
 
     for period in periods:
         for cmdCodeStrings in concatenatedCodes:
-            cursor = conn.cursor()  # apparently re iniiting it makes the connection not expire 
+            cursor = conn.cursor()  # apparently re initing it makes the connection not expire this must be run overnight since Azure free db is sooooooo slow
             mydf = comtradeapicall.getFinalData(subscription_key = apikey,typeCode='C', freqCode='M', clCode='HS', period=period,
                                                 reporterCode='124', cmdCode=cmdCodeStrings, flowCode='X', partnerCode=None, partner2Code=None, 
                                                 customsCode=None, motCode=None, maxRecords=100000, format_output='JSON',
